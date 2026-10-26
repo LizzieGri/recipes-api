@@ -102,16 +102,16 @@ async def main():
             prompt = RichPromptTemplate(query)
             handler = context_agent.run(prompt.format())
 
-    current_agent = None
-    async for event in handler.stream_events():
-        if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
-            current_agent = event.current_agent_name
-            print(f"Current agent: {current_agent}")
-        elif isinstance(event, AgentOutput):
-            if event.response.content:
-                print(event.response.content)
-        elif isinstance(event, ToolCallResult):
-            print(f"Output from tool: {event.tool_output}")
+            current_agent = None
+            async for event in handler.stream_events():
+                if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
+                    current_agent = event.current_agent_name
+                    print(f"Current agent: {current_agent}")
+                elif isinstance(event, AgentOutput):
+                    if event.response.content:
+                        print(event.response.content)
+                elif isinstance(event, ToolCallResult):
+                    print(f"Output from tool: {event.tool_output}")
 
         except EOFError:
             break
