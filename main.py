@@ -116,22 +116,29 @@ context_agent = ReActAgent(
 
 
 async def main() -> None:
-    query = input().strip()
-    if not query:
-        return
-    prompt = RichPromptTemplate(query)
-    handler = context_agent.run(prompt.format())
+    while True:
+        try:
+            raw_line = input()
+        except EOFError:
+            break
 
-    current_agent = None
-    async for event in handler.stream_events():
-        if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
-            current_agent = event.current_agent_name
-            print(f"Current agent: {current_agent}", flush=True)
-        elif isinstance(event, AgentOutput):
-            if event.response.content:
-                print(event.response.content, flush=True)
-        elif isinstance(event, ToolCallResult):
-            print(f"Output from tool: {event.tool_output}", flush=True)
+        query = raw_line.strip()
+        if not query:
+            continue
+
+        prompt = RichPromptTemplate(query)
+        handler = context_agent.run(prompt.format())
+
+        current_agent = None
+        async for event in handler.stream_events():
+            if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
+                current_agent = event.current_agent_name
+                print(f"Current agent: {current_agent}", flush=True)
+            elif isinstance(event, AgentOutput):
+                if event.response.content:
+                    print(event.response.content, flush=True)
+            elif isinstance(event, ToolCallResult):
+                print(f"Output from tool: {event.tool_output}", flush=True)
 
 
 if __name__ == "__main__":
