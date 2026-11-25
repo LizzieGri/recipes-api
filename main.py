@@ -1,78 +1,52 @@
 import asyncio
 import os
-import traceback
-import sys
-from typing import Any
+from typing import Any, List
 
-from dotenv import load_dotenv
-from github import Auth, Github
-from llama_index.core.agent.workflow import (
-    AgentOutput,
-    ReActAgent,
-    ToolCall,
-    ToolCallResult,
-)
+import dotenv
+from github import Github
+from llama_index.core.agent.workflow import AgentOutput, ReActAgent, ToolCallResult
 from llama_index.core.prompts import RichPromptTemplate
-from llama_index.core.tools import FunctionTool
+from llama_index.core.workflow import Context
 from llama_index.llms.openai import OpenAI
 
-repo_url = "https://github.com/LizzieGri/recipes-api.git"
+dotenv.load_dotenv()
 
-load_dotenv()
+default_repo_url = "https://github.com/LizzieGri/recipes-api.git"
 
-token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-effective_repo_url = os.getenv("REPO_URL", repo_url).strip()
+llm = OpenAI(
+    model=(os.getenv("MODEL") or os.getenv("OPENAI_MODEL") or "gpt-6-luna").strip(),
+    api_key=os.getenv("OPENAI_API_KEY"),
+    api_base=os.getenv("OPENAI_BASE_URL") or None,
+)
 
-if not effective_repo_url:
-    raise ValueError("No necessary values")
+github_token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+git = Github(github_token) if github_token else None
 
-git = Github(auth=Auth.Token(token)) if token else Github()
-
-cleaned_url = effective_repo_url.rstrip("/")
-if cleaned_url.endswith(".git"):
-    cleaned_url = cleaned_url[:-4]
-parts = cleaned_url.split("/")
-full_repo_name = f"{parts[-2]}/{parts[-1]}"
-
-repo = git.get_repo(full_repo_name)
+repo_url = (os.getenv("GITHUB_REPO_URL") or os.getenv("REPO_URL") or default_repo_url).strip()
+repo_name = repo_url.split("/")[-1].replace(".git", "")
+username = repo_url.split("/")[-2]
+full_repo_name = f"{username}/{repo_name}"
+repo = git.get_repo(full_repo_name) if git else Github().get_repo(full_repo_name)
 
 
-def get_pr_details(pr_number: int) -> dict[str, Any]:
-    """Get details about a pull request given its PR number, including author, title, body, diff_url, state, commit SHAs, and head_sha."""
-    pull_request = repo.get_pull(pr_number)
-    commit_SHAs = [c.sha for c in pull_request.get_commits()]
-    head_sha = (
-        pull_request.head.sha
-        if pull_request.head
-        else (commit_SHAs[-1] if commit_SHAs else None)
-    )
-
+def get_pr_details(pr_num: int) -> dict:
+    """Returns pull request(PR) details such as pr author, pr title,
+    pr body, the diff ulr, pr state and commit SHA for a given PR number"""
+    pr = repo.get_pull(pr_num)
     return {
-        "user": pull_request.user.login if pull_request.user else None,
-        "author": pull_request.user.login if pull_request.user else None,
-        "title": pull_request.title,
-        "body": pull_request.body,
-        "diff_url": pull_request.diff_url,
-        "state": pull_request.state,
-        "commit_SHAs": commit_SHAs,
-        "head_sha": head_sha,
+        "author": pr.user.login,
+        "title": pr.title,
+        "body": pr.body,
+        "diff_url": pr.diff_url,
+        "state": pr.state,
+        "head_sha": pr.head.sha,
     }
 
 
-def get_file_contents(file_path: str) -> str:
-    """Fetch the contents of a file from the repository given its file path."""
-    try:
-        file_content = repo.get_contents(file_path)
-        if isinstance(file_content, list):
-            return "\n".join(item.path for item in file_content)
-        return file_content.decoded_content.decode("utf-8")
-    except Exception as e:
-        return f"Error fetching file {file_path}: {str(e)}"
-
-
-def get_commit_details(commit_sha: str) -> list[dict[str, Any]]:
-    """Retrieve information about a commit given its SHA, such as changed files, status, additions, deletions, changes, and patch (diff)."""
-    commit = repo.get_commit(commit_sha)
+def get_commit_details(head_sha: str) -> List:
+    """Returns the list of details of files changed. This includes, filename, status, additions,
+    deletions, changes and patches. Takes in a head_sha as input"""
+    commit = repo.get_commit(head_sha)
     changed_files: list[dict[str, Any]] = []
     for f in commit.files:
         changed_files.append(
@@ -88,68 +62,40 @@ def get_commit_details(commit_sha: str) -> list[dict[str, Any]]:
     return changed_files
 
 
-pr_details_tool = FunctionTool.from_defaults(fn=get_pr_details)
-files_tool = FunctionTool.from_defaults(fn=get_file_contents)
-commit_details_tool = FunctionTool.from_defaults(fn=get_commit_details)
+def get_file_content(file_path: str) -> str:
+    """Returns the contents of a file from the repo"""
+    return repo.get_contents(file_path).decoded_content.decode("utf-8")
 
-tools = [pr_details_tool, files_tool, commit_details_tool]
 
-system_prompt = """You are the context gathering agent. When gathering context, you MUST gather : 
--     
-The details: author, title, body, diff_url, state, and head_sha; 
--     
-Changed files; 
--     
-Any requested files; 
-"""
-
-llm = OpenAI(
-    model=os.getenv("OPENAI_MODEL", "gpt-6-luna").strip(),
-    api_key=os.getenv("OPENAI_API_KEY"),
-    api_base=os.getenv("OPENAI_BASE_URL") or None,
-)
-
-context_agent = ReActAgent(
-    name="ContextAgent",
-    tools=tools,
+my_agent = ReActAgent(
     llm=llm,
-    system_prompt=system_prompt,
+    name="MyAgent",
+    tools=[get_pr_details, get_commit_details, get_file_content],
 )
 
 
-async def main() -> None:
-    while True:
-        try:
-            raw_line = input()
-        except EOFError:
-            break
+async def main():
+    query = input().strip()
+    prompt = RichPromptTemplate(query)
+    context = Context(my_agent)
 
-        query = raw_line.strip()
-        if not query:
-            continue
+    handler = my_agent.run(prompt.format(), ctx=context)
 
-        try:
-            prompt = RichPromptTemplate(query)
-            handler = context_agent.run(prompt.format())
-
-            current_agent = None
-            async for event in handler.stream_events():
-                if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
-                    current_agent = event.current_agent_name
-                    print(f"Current agent: {current_agent}", flush=True)
-                elif isinstance(event, AgentOutput):
-                    if event.response.content:
-                        print(event.response.content, flush=True)
-                elif isinstance(event, ToolCallResult):
-                    print(f"Output from tool: {event.tool_output}", flush=True)
-        except Exception:
-            traceback.print_exc()
-            sys.stdout.flush()
-            sys.stderr.flush()
+    current_agent = None
+    async for event in handler.stream_events():
+        if hasattr(event, "current_agent_name") and event.current_agent_name != current_agent:
+            current_agent = event.current_agent_name
+            print(f"Current agent: {current_agent}")
+        elif isinstance(event, AgentOutput):
+            if event.response.content:
+                print(event.response.content)
+        elif isinstance(event, ToolCallResult):
+            print(f"Output from tool: {event.tool_output}")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     finally:
-        git.close()
+        if git is not None:
+            git.close()
