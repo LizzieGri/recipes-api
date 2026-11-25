@@ -1,17 +1,15 @@
+import dotenv
 import asyncio
 import os
 from typing import Any, List
-
-import dotenv
 from github import Github
-from llama_index.core.agent.workflow import AgentOutput, ReActAgent, ToolCallResult
-from llama_index.core.prompts import RichPromptTemplate
-from llama_index.core.workflow import Context
 from llama_index.llms.openai import OpenAI
+from llama_index.core.agent.workflow import ReActAgent
+from llama_index.core.workflow import Context
+from llama_index.core.agent.workflow import ToolCallResult, AgentOutput
+from llama_index.core.prompts import RichPromptTemplate
 
 dotenv.load_dotenv()
-
-default_repo_url = "https://github.com/LizzieGri/recipes-api.git"
 
 llm = OpenAI(
     model=(os.getenv("MODEL") or os.getenv("OPENAI_MODEL") or "gpt-6-luna").strip(),
@@ -19,14 +17,12 @@ llm = OpenAI(
     api_base=os.getenv("OPENAI_BASE_URL") or None,
 )
 
-github_token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-git = Github(github_token) if github_token else None
-
-repo_url = (os.getenv("GITHUB_REPO_URL") or os.getenv("REPO_URL") or default_repo_url).strip()
+git = Github(os.getenv("GITHUB_TOKEN")) if os.getenv("GITHUB_TOKEN") else None
+repo_url = os.getenv("GITHUB_REPO_URL")
 repo_name = repo_url.split("/")[-1].replace(".git", "")
 username = repo_url.split("/")[-2]
 full_repo_name = f"{username}/{repo_name}"
-repo = git.get_repo(full_repo_name) if git else Github().get_repo(full_repo_name)
+repo = git.get_repo(full_repo_name)
 
 
 def get_pr_details(pr_num: int) -> dict:
@@ -93,9 +89,7 @@ async def main():
             print(f"Output from tool: {event.tool_output}")
 
 
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    finally:
-        if git is not None:
-            git.close()
+    asyncio.run(main())
+    git.close()
