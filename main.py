@@ -2,12 +2,15 @@ import os
 import asyncio
 from typing import Any
 from dotenv import load_dotenv
-from github import Github, Auth
-
-from llama_index.core.tools import FunctionTool
-from llama_index.core.agent import ReActAgent
-from llama_index.core.agent.workflow import AgentOutput, ToolCall, ToolCallResult
+from github import Auth, Github
+from llama_index.core.agent.workflow import (
+    AgentOutput,
+    ReActAgent,
+    ToolCall,
+    ToolCallResult,
+)
 from llama_index.core.prompts import RichPromptTemplate
+from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
 
 load_dotenv()
@@ -33,14 +36,20 @@ def get_pr_details(pr_number: int) -> dict[str, Any]:
     """Get details about a pull request given its PR number, including author, title, body, diff_url, state, and commit SHAs."""
     pull_request = repo.get_pull(pr_number)
     commit_SHAs = [c.sha for c in pull_request.get_commits()]
+    head_sha = (
+        pull_request.head.sha
+        if pull_request.head
+        else (commit_SHAs[-1] if commit_SHAs else None)
+    )
 
     return {
-        "author": pull_request.user.login,
+        "author": pull_request.user.login if pull_request.user else None,
         "title": pull_request.title,
         "body": pull_request.body,
         "diff_url": pull_request.diff_url,
         "state": pull_request.state,
         "commit_SHAs": commit_SHAs,
+        "head_sha": head_sha,
     }
 
 
@@ -48,6 +57,8 @@ def get_file_contents(file_path: str) -> str:
     """Fetch the contents of a file from the repository given its file path."""
     try:
         file_content = repo.get_contents(file_path)
+        if isinstance(file_content, list):
+            return "\n".join(item.path for item in file_content)
         return file_content.decoded_content.decode("utf-8")
     except Exception as e:
         return f"Error fetching file {file_path}: {str(e)}"
@@ -83,9 +94,14 @@ Changed files;
 Any requested for files; 
 """
 
-llm = OpenAI(model="gpt-4o")
+llm = OpenAI(
+    model=os.getenv("OPENAI_MODEL", "gpt-6-luna").strip(),
+    api_key=os.getenv("OPENAI_API_KEY"),
+    api_base=os.getenv("OPENAI_BASE_URL") or None,
+)
 
-context_agent = ReActAgent.from_tools(
+context_agent = ReActAgent(
+    name="ContextAgent",
     tools=tools,
     llm=llm,
     system_prompt=system_prompt,
